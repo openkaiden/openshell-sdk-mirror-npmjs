@@ -142,3 +142,17 @@ STUB
   run cat "${MOCK_BIN}/npm_publish_args.log"
   refute_output --partial "--provenance"
 }
+
+@test "aborts on unexpected check-published error (exit 2)" {
+  cat > "${FAKE_SCRIPTS_DIR}/check-published.sh" <<'STUB'
+#!/usr/bin/env bash
+echo "network timeout" >&2
+exit 2
+STUB
+  chmod +x "${FAKE_SCRIPTS_DIR}/check-published.sh"
+
+  run "${FAKE_SCRIPTS_DIR}/publish-version.sh" "0.0.116"
+  assert_failure
+  assert_output --partial "Error checking publication status"
+  [ ! -f "${MOCK_BIN}/npm_publish_args.log" ]
+}

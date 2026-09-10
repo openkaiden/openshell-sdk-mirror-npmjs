@@ -58,44 +58,59 @@ jobs:
       - name: Determine version to sync
         id: version
         run: |
-          if [ -n "${{ inputs.version }}" ]; then
-            echo "value=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          if [ -n "${INPUT_VERSION}" ]; then
+            echo "value=${INPUT_VERSION}" >> "$GITHUB_OUTPUT"
           else
             VERSION=$(./scripts/fetch-latest-version.sh)
             echo "value=${VERSION}" >> "$GITHUB_OUTPUT"
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_VERSION: ${{ inputs.version }}
 
       - name: Check if already published
         id: check
         run: |
-          if ./scripts/check-published.sh "${{ steps.version.outputs.value }}"; then
+          set +e
+          ./scripts/check-published.sh "${SYNC_VERSION}"
+          STATUS=$?
+          set -e
+          if [ ${STATUS} -eq 0 ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
+          elif [ ${STATUS} -eq 1 ]; then
             echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Unexpected error from check-published.sh (exit ${STATUS})" >&2
+            exit 1
           fi
+        env:
+          SYNC_VERSION: ${{ steps.version.outputs.value }}
 
       - name: Repackage
         if: steps.check.outputs.skip != 'true'
         id: repackage
         run: |
-          TARBALL=$(./scripts/repackage.sh "${{ steps.version.outputs.value }}")
+          TARBALL=$(./scripts/repackage.sh "${SYNC_VERSION}")
           echo "tarball=${TARBALL}" >> "$GITHUB_OUTPUT"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SYNC_VERSION: ${{ steps.version.outputs.value }}
 
       - name: Publish to npmjs with provenance
         if: steps.check.outputs.skip != 'true'
-        run: npm publish "${{ steps.repackage.outputs.tarball }}" --provenance --access public
+        run: npm publish "${TARBALL_PATH}" --provenance --access public
+        env:
+          TARBALL_PATH: ${{ steps.repackage.outputs.tarball }}
 
       - name: Summary
         run: |
-          VERSION="${{ steps.version.outputs.value }}"
-          if [ "${{ steps.check.outputs.skip }}" = "true" ]; then
+          if [ "${SKIP}" = "true" ]; then
             echo "### No action needed" >> "$GITHUB_STEP_SUMMARY"
-            echo "@openkaiden/opnshll-sdk@${VERSION} is already on npmjs.org" >> "$GITHUB_STEP_SUMMARY"
+            echo "@openkaiden/opnshll-sdk@${SYNC_VERSION} is already on npmjs.org" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "### Published successfully" >> "$GITHUB_STEP_SUMMARY"
-            echo "@openkaiden/opnshll-sdk@${VERSION} published to npmjs.org with provenance" >> "$GITHUB_STEP_SUMMARY"
+            echo "@openkaiden/opnshll-sdk@${SYNC_VERSION} published to npmjs.org with provenance" >> "$GITHUB_STEP_SUMMARY"
           fi
+        env:
+          SYNC_VERSION: ${{ steps.version.outputs.value }}
+          SKIP: ${{ steps.check.outputs.skip }}

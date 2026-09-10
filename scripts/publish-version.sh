@@ -29,9 +29,17 @@ fi
 
 echo "Syncing version ${VERSION}..." >&2
 
-if "${SCRIPT_DIR}/check-published.sh" "${VERSION}"; then
+set +e
+"${SCRIPT_DIR}/check-published.sh" "${VERSION}"
+CHECK_STATUS=$?
+set -e
+
+if [ ${CHECK_STATUS} -eq 0 ]; then
   echo "Version ${VERSION} already published. Nothing to do." >&2
   exit 0
+elif [ ${CHECK_STATUS} -ne 1 ]; then
+  echo "Error checking publication status (exit ${CHECK_STATUS}). Aborting." >&2
+  exit 1
 fi
 
 TARBALL=$("${SCRIPT_DIR}/repackage.sh" "${VERSION}")
