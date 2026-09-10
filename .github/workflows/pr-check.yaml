@@ -53,6 +53,9 @@ jobs:
           file-install: false
           detik-install: false
 
+      - name: Set BATS_LIB_PATH
+        run: echo "BATS_LIB_PATH=${SUPPORT_DESTDIR%/*}" >> "$GITHUB_ENV"
+
       - name: Make scripts executable
         run: chmod +x scripts/*.sh
 
