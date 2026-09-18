@@ -1,0 +1,129 @@
+#
+# Copyright (C) 2026 Red Hat, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: Build SDK from source and publish to npmjs
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_id:
+        description: >
+          Commit SHA from github.com/nvidia/openshell to build.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  build-and-publish:
+    name: Build from source and publish
+    runs-on: ubuntu-26.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Clone upstream repository
+        run: |
+          git clone https://github.com/nvidia/openshell.git upstream
+          cd upstream
+          git checkout "${{ inputs.commit_id }}"
+
+      - name: Compute version
+        id: version
+        run: |
+          FULL_SHA=$(cd upstream && git rev-parse HEAD)
+          SHORT_SHA="${FULL_SHA:0:7}"
+          BUILD_DATE=$(date -u +%Y%m%d)
+          VERSION="0.0.0-${BUILD_DATE}-${SHORT_SHA}"
+          echo "value=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Make scripts executable
+        run: chmod +x scripts/*.sh
+
+      - name: Check if already published
+        id: check
+        run: |
+          set +e
+          ./scripts/check-published.sh "${SYNC_VERSION}"
+          STATUS=$?
+          set -e
+          if [ ${STATUS} -eq 0 ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          elif [ ${STATUS} -eq 1 ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Unexpected error from check-published.sh (exit ${STATUS})" >&2
+            exit 1
+          fi
+        env:
+          SYNC_VERSION: ${{ steps.version.outputs.value }}
+
+      - name: Install SDK dependencies
+        if: steps.check.outputs.skip != 'true'
+        run: npm install
+        working-directory: upstream/sdk/typescript
+
+      - name: Generate protobuf code
+        if: steps.check.outputs.skip != 'true'
+        run: npm run gen
+        working-directory: upstream/sdk/typescript
+
+      - name: Build SDK
+        if: steps.check.outputs.skip != 'true'
+        run: npm run build
+        working-directory: upstream/sdk/typescript
+
+      - name: Repackage
+        if: steps.check.outputs.skip != 'true'
+        id: repackage
+        run: |
+          TARBALL=$(./scripts/build-repackage.sh upstream/sdk/typescript "${SYNC_VERSION}")
+          echo "tarball=${TARBALL}" >> "$GITHUB_OUTPUT"
+        env:
+          SYNC_VERSION: ${{ steps.version.outputs.value }}
+
+      - name: Publish to npmjs with provenance
+        if: steps.check.outputs.skip != 'true'
+        run: npm publish "${TARBALL_PATH}" --provenance --access public
+        env:
+          TARBALL_PATH: ${{ steps.repackage.outputs.tarball }}
+
+      - name: Summary
+        run: |
+          if [ "${SKIP}" = "true" ]; then
+            echo "### No action needed" >> "$GITHUB_STEP_SUMMARY"
+            echo "@openkaiden/opnshll-sdk@${SYNC_VERSION} is already on npmjs.org" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### Published successfully" >> "$GITHUB_STEP_SUMMARY"
+            echo "@openkaiden/opnshll-sdk@${SYNC_VERSION} built from nvidia/openshell@${{ inputs.commit_id }} and published to npmjs.org with provenance" >> "$GITHUB_STEP_SUMMARY"
+          fi
+        env:
+          SYNC_VERSION: ${{ steps.version.outputs.value }}
+          SKIP: ${{ steps.check.outputs.skip }}
