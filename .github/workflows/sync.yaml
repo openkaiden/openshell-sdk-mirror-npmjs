@@ -26,6 +26,13 @@ on:
         description: >
           Specific version to publish (e.g. 0.0.116).
           Leave empty to sync the latest version.
+          Ignored when commit_id is set.
+        required: false
+        type: string
+      commit_id:
+        description: >
+          Commit SHA from github.com/nvidia/openshell to build from source.
+          When set, the SDK is built from source instead of mirrored.
         required: false
         type: string
 
@@ -55,8 +62,57 @@ jobs:
       - name: Make scripts executable
         run: chmod +x scripts/*.sh
 
+      - name: Determine mode
+        id: mode
+        run: |
+          if [ -n "${COMMIT_ID}" ]; then
+            echo "build_from_source=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build_from_source=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          COMMIT_ID: ${{ inputs.commit_id }}
+
+      # === Build-from-source path ===
+
+      - name: Checkout upstream repository
+        if: steps.mode.outputs.build_from_source == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: nvidia/openshell
+          ref: ${{ inputs.commit_id }}
+          path: upstream
+
+      - name: Compute version from commit
+        if: steps.mode.outputs.build_from_source == 'true'
+        id: source-version
+        run: |
+          FULL_SHA=$(cd upstream && git rev-parse HEAD)
+          SHORT_SHA="${FULL_SHA:0:7}"
+          BUILD_DATE=$(date -u +%Y%m%d)
+          VERSION="0.0.0-next.${BUILD_DATE}-${SHORT_SHA}"
+          echo "value=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Install SDK dependencies
+        if: steps.mode.outputs.build_from_source == 'true'
+        run: npm install
+        working-directory: upstream/sdk/typescript
+
+      - name: Generate protobuf code
+        if: steps.mode.outputs.build_from_source == 'true'
+        run: npm run gen
+        working-directory: upstream/sdk/typescript
+
+      - name: Build SDK
+        if: steps.mode.outputs.build_from_source == 'true'
+        run: npm run build
+        working-directory: upstream/sdk/typescript
+
+      # === Mirror path ===
+
       - name: Determine version to sync
-        id: version
+        if: steps.mode.outputs.build_from_source != 'true'
+        id: mirror-version
         run: |
           if [ -n "${INPUT_VERSION}" ]; then
             echo "value=${INPUT_VERSION}" >> "$GITHUB_OUTPUT"
@@ -67,6 +123,21 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GH_PKG_READ_TOKEN }}
           INPUT_VERSION: ${{ inputs.version }}
+
+      # === Common path ===
+
+      - name: Set effective version
+        id: version
+        run: |
+          if [ "${BUILD_FROM_SOURCE}" = "true" ]; then
+            echo "value=${SOURCE_VERSION}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${MIRROR_VERSION}" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          BUILD_FROM_SOURCE: ${{ steps.mode.outputs.build_from_source }}
+          SOURCE_VERSION: ${{ steps.source-version.outputs.value }}
+          MIRROR_VERSION: ${{ steps.mirror-version.outputs.value }}
 
       - name: Check if already published
         id: check
@@ -90,9 +161,14 @@ jobs:
         if: steps.check.outputs.skip != 'true'
         id: repackage
         run: |
-          TARBALL=$(./scripts/repackage.sh "${SYNC_VERSION}")
+          if [ "${BUILD_FROM_SOURCE}" = "true" ]; then
+            TARBALL=$(./scripts/build-repackage.sh upstream/sdk/typescript "${SYNC_VERSION}")
+          else
+            TARBALL=$(./scripts/repackage.sh "${SYNC_VERSION}")
+          fi
           echo "tarball=${TARBALL}" >> "$GITHUB_OUTPUT"
         env:
+          BUILD_FROM_SOURCE: ${{ steps.mode.outputs.build_from_source }}
           GITHUB_TOKEN: ${{ secrets.GH_PKG_READ_TOKEN }}
           SYNC_VERSION: ${{ steps.version.outputs.value }}
 
@@ -107,6 +183,9 @@ jobs:
           if [ "${SKIP}" = "true" ]; then
             echo "### No action needed" >> "$GITHUB_STEP_SUMMARY"
             echo "@openkaiden/opnshll-sdk@${SYNC_VERSION} is already on npmjs.org" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "${BUILD_FROM_SOURCE}" = "true" ]; then
+            echo "### Published successfully" >> "$GITHUB_STEP_SUMMARY"
+            echo "@openkaiden/opnshll-sdk@${SYNC_VERSION} built from nvidia/openshell@${COMMIT_ID} and published to npmjs.org with provenance" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "### Published successfully" >> "$GITHUB_STEP_SUMMARY"
             echo "@openkaiden/opnshll-sdk@${SYNC_VERSION} published to npmjs.org with provenance" >> "$GITHUB_STEP_SUMMARY"
@@ -114,3 +193,5 @@ jobs:
         env:
           SYNC_VERSION: ${{ steps.version.outputs.value }}
           SKIP: ${{ steps.check.outputs.skip }}
+          BUILD_FROM_SOURCE: ${{ steps.mode.outputs.build_from_source }}
+          COMMIT_ID: ${{ inputs.commit_id }}
