@@ -193,7 +193,7 @@ jobs:
 
       - name: Publish to npmjs with provenance
         if: steps.check.outputs.skip != 'true'
-        run: npm publish "${TARBALL_PATH}" --provenance --access public
+        run: npm publish --tag next "${TARBALL_PATH}" --provenance --access public
         env:
           TARBALL_PATH: ${{ steps.repackage.outputs.tarball }}
 
