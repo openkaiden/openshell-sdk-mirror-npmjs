@@ -136,6 +136,7 @@ jobs:
         with:
           repository: nvidia/openshell
           path: upstream
+          persists-credentials: false
 
       - name: Compute version
         id: version
