@@ -65,7 +65,7 @@ jobs:
             echo "value=${VERSION}" >> "$GITHUB_OUTPUT"
           fi
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_PKG_READ_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.KAIDEN_BOT_TOKEN }}
           INPUT_VERSION: ${{ inputs.version }}
 
       - name: Check if already published
@@ -93,7 +93,7 @@ jobs:
           TARBALL=$(./scripts/repackage.sh "${SYNC_VERSION}")
           echo "tarball=${TARBALL}" >> "$GITHUB_OUTPUT"
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_PKG_READ_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.KAIDEN_BOT_TOKEN }}
           SYNC_VERSION: ${{ steps.version.outputs.value }}
 
       - name: Publish to npmjs with provenance
